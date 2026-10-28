@@ -1,0 +1,98 @@
+name: Build Security Camera APK
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "index.html"
+      - "logo.png"
+      - ".github/workflows/main.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Install Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
+
+      - name: Prepare web assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f index.html
+          mkdir -p www
+          cp index.html www/index.html
+          echo "Security Camera web assets prepared."
+
+      - name: Create Capacitor Android project
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm init -y
+          npm install @capacitor/core@7 @capacitor/android@7
+          npm install --save-dev @capacitor/cli@7
+          npx cap init "Security Camera" "com.securitycam.monitor" --web-dir www
+          npx cap add android
+
+      - name: Configure Android camera permissions
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          p = Path('android/app/src/main/AndroidManifest.xml')
+          text = p.read_text()
+          permissions = [
+              'android.permission.CAMERA',
+              'android.permission.INTERNET',
+              'android.permission.WAKE_LOCK',
+          ]
+          for perm in permissions:
+              if perm not in text:
+                  text = text.replace('<application', f'<uses-permission android:name="{perm}" />\n    <application', 1)
+          # Camera feature is optional so app installation is not blocked on devices with unusual camera declarations.
+          feature = '<uses-feature android:name="android.hardware.camera" android:required="false" />'
+          if 'android.hardware.camera"' not in text:
+              text = text.replace('<application', feature + '\n    <application', 1)
+          p.write_text(text)
+          PY
+
+      - name: Sync Capacitor
+        run: npx cap sync android
+
+      - name: Build debug APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: SecurityCamera-APK
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 7
+          
